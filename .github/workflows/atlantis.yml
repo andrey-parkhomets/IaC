@@ -34,7 +34,7 @@ jobs:
     environment: main
     container:
       # Debian needed for GHA to use cache (uses /bin/tar --posix)
-      image: ghcr.io/andrey-parkhomets/IaC:sha-00e922e # atlantis + azure-cli + hcledit/hcl-get
+      image: ghcr.io/andrey-parkhomets/iac:sha-00e922e # atlantis + azure-cli + hcledit/hcl-get
       env:
         # azurerm provider/backend fetch fresh OIDC tokens themselves; subscription comes from backend.hcl
         ARM_USE_OIDC: true
