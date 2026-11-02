@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Prints the value of a top-level attribute from an HCL file, string quotes stripped.
+# Fails if the attribute is missing (hcledit itself exits 0 with empty output).
+# Usage: hcl-get <attribute> [file]    file defaults to backend.hcl
+set -euo pipefail
+
+attr=${1:?usage: hcl-get <attribute> [file]}
+file=${2:-backend.hcl}
+
+value=$(hcledit attribute get "$attr" -f "$file")
+if [[ -z $value ]]; then
+  echo "hcl-get: attribute '$attr' not found in $file" >&2
+  exit 1
+fi
+
+value=${value#\"}
+value=${value%\"}
+printf '%s\n' "$value"
