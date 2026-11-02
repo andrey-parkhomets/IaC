@@ -28,4 +28,19 @@ RUN set -ex && \
     apt-get install -y azure-cli=${AZ_VER}-1~${AZ_DIST} && \
     rm -rf /var/lib/apt/lists/*
 
+# hcledit + hcl-get: read attributes (e.g. subscription_id) from backend.hcl in Atlantis workflows
+ARG HCLEDIT_VER=0.2.18
+RUN set -ex && \
+    ARCH=$(dpkg --print-architecture) && \
+    TARBALL=hcledit_${HCLEDIT_VER}_linux_${ARCH}.tar.gz && \
+    cd /tmp && \
+    curl -fsSLO https://github.com/minamijoyo/hcledit/releases/download/v${HCLEDIT_VER}/${TARBALL} && \
+    curl -fsSL https://github.com/minamijoyo/hcledit/releases/download/v${HCLEDIT_VER}/hcledit_${HCLEDIT_VER}_checksums.txt \
+      | grep " ${TARBALL}\$" | sha256sum -c - && \
+    tar -xzf ${TARBALL} -C /usr/local/bin hcledit && \
+    rm ${TARBALL} && \
+    hcledit version
+
+COPY --chmod=755 scripts/hcl-get /usr/local/bin/hcl-get
+
 USER atlantis
