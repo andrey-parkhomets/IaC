@@ -7,6 +7,9 @@ locals {
   # "bootstrap" holds the state of this root itself.
   environments = ["bootstrap", "dev"]
 
+  # Atlantis data dir (plans, locks) per PR, persisted between GitHub Actions runs
+  extra_containers = ["atlantis"]
+
   # Object IDs allowed to read/write state:
   #   you:  az ad signed-in-user show --query id -o tsv
   #   CI:   az ad sp show --id <AZURE_CLIENT_ID> --query id -o tsv
@@ -28,6 +31,7 @@ module "backend" {
   location                        = local.location
   name_suffix                     = ["poc"]
   environments                    = local.environments
+  extra_containers                = local.extra_containers
   state_contributor_principal_ids = local.state_contributor_principal_ids
 }
 

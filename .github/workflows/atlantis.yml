@@ -29,19 +29,26 @@ permissions:
 jobs:
   atlantis:
     name: Atlantis
+    # Only PR events and comments on PRs (not on plain issues)
+    if: github.event_name == 'pull_request' || github.event.issue.pull_request
     runs-on: ubuntu-24.04
     # Environment secrets + OIDC subject "...:environment:main"
     environment: main
+    # Runs of the same PR share one data blob, so never run them in parallel
+    concurrency:
+      group: atlantis-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      ATLANTIS_DATA_ACCOUNT: stpocuu28
+      ATLANTIS_DATA_CONTAINER: atlantis
+      ATLANTIS_DATA_BLOB: pr-${{ github.event.pull_request.number || github.event.issue.number }}.tgz
     container:
-      # Debian needed for GHA to use cache (uses /bin/tar --posix)
       image: ghcr.io/andrey-parkhomets/iac:sha-00e922e # atlantis + azure-cli + hcledit/hcl-get
       env:
         # azurerm provider/backend fetch fresh OIDC tokens themselves; subscription comes from backend.hcl
         ARM_USE_OIDC: true
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        # Volume mounted outside of /home/atlantis needed for cache action to have privileges to it
-        # ATLANTIS_DATA_DIR: atlantis-data
         ATLANTIS_GH_USER: ${{ github.actor }}
         ATLANTIS_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         ATLANTIS_LOCKING_DB_TYPE: boltdb #redis
@@ -59,53 +66,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get PR Number and Short SHA
-        id: pr-sha
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const eventName = context.eventName;
-            let prNumber, commitSha;
-
-            if (eventName === 'pull_request') {
-              prNumber = context.payload.pull_request.number;
-              commitSha = context.payload.pull_request.head.sha;
-            } else if (eventName === 'issue_comment' && context.payload.issue.pull_request) {
-              prNumber = context.payload.issue.number;
-              const pr = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber
-              });
-              commitSha = pr.data.head.sha;
-            } else {
-              throw new Error('Not a pull request event or comment on a PR');
-            }
-
-            const shortSha = commitSha.slice(0, 7);
-            core.setOutput('pr', prNumber);
-            core.setOutput('sha', shortSha);
-      - name: create folder for Atlantis data
-        timeout-minutes: 1
-        run: |
-          mkdir -p ${GITHUB_WORKSPACE}/atlantis-data
-      - name: Restore Atlantis data
-        id: restore-atlantis-data
-        uses: actions/cache/restore@v4
-        if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
-        with:
-          path: ${{github.workspace}}/atlantis-data
-          key: atlantis-data-${{ steps.pr-sha.outputs.pr }}-${{ steps.pr-sha.outputs.sha }}
-          restore-keys: |
-            atlantis-data-${{ steps.pr-sha.outputs.pr }}-
-            atlantis-data-
       - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
+
+      # Atlantis data dir (plans, locks) lives in blob storage per PR: GHA caches are
+      # ref-scoped (pull_request vs issue_comment on main) and issue_comment can't write them
+      - name: Restore Atlantis data
+        id: restore-atlantis-data
+        timeout-minutes: 5
+        run: |
+          mkdir -p atlantis-data
+          if [ "$(az storage blob exists --auth-mode login --account-name "$ATLANTIS_DATA_ACCOUNT" \
+                  -c "$ATLANTIS_DATA_CONTAINER" -n "$ATLANTIS_DATA_BLOB" --query exists -o tsv)" = true ]; then
+            az storage blob download --auth-mode login --account-name "$ATLANTIS_DATA_ACCOUNT" \
+              -c "$ATLANTIS_DATA_CONTAINER" -n "$ATLANTIS_DATA_BLOB" -f /tmp/atlantis-data.tgz --only-show-errors -o none
+            tar -xzf /tmp/atlantis-data.tgz -C atlantis-data
+            echo "Restored $ATLANTIS_DATA_BLOB"
+          else
+            echo "No saved data for $ATLANTIS_DATA_BLOB, starting fresh"
+          fi
 
       - name: Run Atlantis
         timeout-minutes: 15
@@ -141,11 +124,23 @@ jobs:
           kill $atlantis_pid
           wait $atlantis_pid
 
-      - name: Save Atlantis data
-        id: save-atlantis-data
-        uses: actions/cache/save@v4
-        if: always() && steps.restore-atlantis-data.outputs.cache-hit != 'true'
+      # Fresh login: the OIDC assertion from the first one may have expired during a long run
+      - name: Azure login (save)
+        if: always() && steps.restore-atlantis-data.outcome == 'success'
+        uses: azure/login@v2
         with:
-          path: ${{github.workspace}}/atlantis-data
-          key: ${{ steps.restore-atlantis-data.outputs.cache-primary-key }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Save Atlantis data
+        if: always() && steps.restore-atlantis-data.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          # bin/ only holds downloaded terraform binaries, re-fetched on demand
+          tar -czf /tmp/atlantis-data.tgz -C atlantis-data --exclude ./bin .
+          az storage blob upload --auth-mode login --account-name "$ATLANTIS_DATA_ACCOUNT" \
+            -c "$ATLANTIS_DATA_CONTAINER" -n "$ATLANTIS_DATA_BLOB" -f /tmp/atlantis-data.tgz \
+            --overwrite --only-show-errors -o none
+          echo "Saved $ATLANTIS_DATA_BLOB ($(du -h /tmp/atlantis-data.tgz | cut -f1))"
     

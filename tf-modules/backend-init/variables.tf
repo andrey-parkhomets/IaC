@@ -18,6 +18,12 @@ variable "environments" {
   }
 }
 
+variable "extra_containers" {
+  type        = set(string)
+  default     = []
+  description = "Additional containers in the state account that are not Terraform backends (e.g. Atlantis data)"
+}
+
 variable "state_contributor_principal_ids" {
   type        = set(string)
   default     = []

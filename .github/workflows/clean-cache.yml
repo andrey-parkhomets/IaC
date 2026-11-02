@@ -1,23 +1,32 @@
-name: Clean Cache
-run-name: "Clean Atlantis Cache for PR #${{ github.event.pull_request.number }}"
+name: Clean Atlantis Data
+run-name: "Clean Atlantis data for PR #${{ github.event.pull_request.number }}"
 on:
   pull_request:
     types: [closed]
 
 permissions:
-  actions: write
+  id-token: write
 
 jobs:
-  clean-cache:
+  clean-atlantis-data:
     runs-on: ubuntu-24.04
+    environment: main
     container:
-      image: maniator/gh:latest
+      image: ghcr.io/andrey-parkhomets/iac:sha-00e922e
+      options: --user root
+    env:
+      ATLANTIS_DATA_ACCOUNT: stpocuu28
+      ATLANTIS_DATA_CONTAINER: atlantis
+      ATLANTIS_DATA_BLOB: pr-${{ github.event.pull_request.number }}.tgz
     steps:
-      - name: Clean Atlantis Cache
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Delete Atlantis data blob
         run: |
-          gh cache delete atlantis-data-${PR_NUMBER}  --repo $OWNER/$REPO || (exit 0)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          az storage blob delete --auth-mode login --account-name "$ATLANTIS_DATA_ACCOUNT" \
+            -c "$ATLANTIS_DATA_CONTAINER" -n "$ATLANTIS_DATA_BLOB" --only-show-errors || true

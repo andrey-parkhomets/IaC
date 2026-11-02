@@ -1,9 +1,9 @@
 ---
 repos:
   - id: /.*/
+    # PoC with a single maintainer: authors can't approve their own PRs. Re-add "approved" with a second reviewer.
     apply_requirements:
       - mergeable
-      - approved
     allowed_overrides:
       - workflow
     allow_custom_workflows: true

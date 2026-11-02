@@ -36,6 +36,13 @@ resource "azurerm_storage_container" "this" {
   container_access_type = "private"
 }
 
+resource "azurerm_storage_container" "extra" {
+  for_each              = var.extra_containers
+  name                  = each.key
+  storage_account_id    = azurerm_storage_account.this.id
+  container_access_type = "private"
+}
+
 # Backends use Entra ID auth (use_azuread_auth), which requires a data plane role
 resource "azurerm_role_assignment" "state_contributor" {
   for_each             = var.state_contributor_principal_ids
