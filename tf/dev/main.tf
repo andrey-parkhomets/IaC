@@ -23,3 +23,5 @@ output "caller" {
     tenant_id       = data.azurerm_client_config.current.tenant_id
   }
 }
+
+# test: PR closed without merge
