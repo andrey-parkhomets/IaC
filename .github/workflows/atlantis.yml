@@ -50,6 +50,8 @@ jobs:
         # ATLANTIS_REDIS_PORT: ${{secrets.REDIS_PORT  }}
         ATLANTIS_REPO_ALLOWLIST: github.com/${{ github.repository }}
         ATLANTIS_DISABLE_AUTOPLAN: false
+        # Base image ships no terraform; Atlantis downloads it into the data dir
+        ATLANTIS_DEFAULT_TF_VERSION: 1.12.2
       options: --user root
 
     steps:
@@ -106,7 +108,7 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Run Atlantis
-        timeout-minutes: 1
+        timeout-minutes: 15
         run: |
           # Start server in background
           echo "===================="
