@@ -1,0 +1,9 @@
+version: 3
+automerge: true
+projects:
+  - dir: tf/dev
+    terraform_version: 1.12.2
+    autoplan:
+      enabled: true
+      when_modified: ['**/*.tf', '*.tf*', 'backend.hcl']
+    workflow: azure

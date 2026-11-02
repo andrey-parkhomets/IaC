@@ -1,0 +1,149 @@
+
+name: 'Atlantis'
+
+run-name: >-
+  ${{ github.event_name == 'issue_comment' &&
+      format('{0} for PR #{1}', github.event.comment.body, github.event.issue.number)
+    || github.event_name == 'pull_request' &&
+      format('atlantis plan for PR #{0}', github.event.pull_request.number) }}
+
+on:
+  # Issue comments target default branch so workflow definition in main (rather than PR) is used
+  issue_comment:
+    types:
+      - created
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  checks: write
+  contents: write
+  issues: write
+  pull-requests: write
+  statuses: write
+  id-token: write
+
+jobs:
+  atlantis:
+    name: Atlantis
+    runs-on: ubuntu-24.04
+    # Environment secrets + OIDC subject "...:environment:main"
+    environment: main
+    container:
+      # Debian needed for GHA to use cache (uses /bin/tar --posix)
+      image: ghcr.io/andrey-parkhomets/IaC:sha-00e922e # atlantis + azure-cli + hcledit/hcl-get
+      env:
+        # azurerm provider/backend fetch fresh OIDC tokens themselves; subscription comes from backend.hcl
+        ARM_USE_OIDC: true
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        # Volume mounted outside of /home/atlantis needed for cache action to have privileges to it
+        # ATLANTIS_DATA_DIR: atlantis-data
+        ATLANTIS_GH_USER: ${{ github.actor }}
+        ATLANTIS_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        ATLANTIS_LOCKING_DB_TYPE: boltdb #redis
+        # ATLANTIS_REDIS_HOST: ${{ secrets.REDIS_HOST }} #redis
+        # ATLANTIS_REDIS_PASSWORD: ${{secrets.REDIS_PASSWORD  }}
+        # ATLANTIS_REDIS_PORT: ${{secrets.REDIS_PORT  }}
+        ATLANTIS_REPO_ALLOWLIST: github.com/${{ github.repository }}
+        ATLANTIS_DISABLE_AUTOPLAN: false
+      options: --user root
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR Number and Short SHA
+        id: pr-sha
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const eventName = context.eventName;
+            let prNumber, commitSha;
+
+            if (eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+              commitSha = context.payload.pull_request.head.sha;
+            } else if (eventName === 'issue_comment' && context.payload.issue.pull_request) {
+              prNumber = context.payload.issue.number;
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              commitSha = pr.data.head.sha;
+            } else {
+              throw new Error('Not a pull request event or comment on a PR');
+            }
+
+            const shortSha = commitSha.slice(0, 7);
+            core.setOutput('pr', prNumber);
+            core.setOutput('sha', shortSha);
+      - name: create folder for Atlantis data
+        timeout-minutes: 1
+        run: |
+          mkdir -p ${GITHUB_WORKSPACE}/atlantis-data
+      - name: Restore Atlantis data
+        id: restore-atlantis-data
+        uses: actions/cache/restore@v4
+        if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
+        with:
+          path: ${{github.workspace}}/atlantis-data
+          key: atlantis-data-${{ steps.pr-sha.outputs.pr }}-${{ steps.pr-sha.outputs.sha }}
+          restore-keys: |
+            atlantis-data-${{ steps.pr-sha.outputs.pr }}-
+            atlantis-data-
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Run Atlantis
+        timeout-minutes: 1
+        run: |
+          # Start server in background
+          echo "===================="
+          # ls -la  ${GITHUB_WORKSPACE}/atlantis-data/*
+          echo "===================="
+          #
+          atlantis server --repo-config .github/workflows/config/atlantis_repoConfig.yaml --data-dir ${GITHUB_WORKSPACE}/atlantis-data &
+          atlantis_pid=$!
+          
+          # Wait for Atlantis to start
+          until curl --output /dev/null --silent --fail http://localhost:4141/healthz; do
+            sleep 5
+          done
+          
+          # Relay event
+          curl --silent --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'X-GitHub-Event: ${{ github.event_name }}' \
+            --header 'X-GitHub-Delivery: ${{ github.run_id }}' \
+            --data '${{ toJson(github.event) }}' \
+            http://localhost:4141/events
+          
+          # Wait for Atlantis to run
+          sleep 5
+          until curl --silent http://localhost:4141/status | grep '"in_progress_operations": 0'; do
+            sleep 5
+          done
+          
+          # Wait for Atlantis to exit gracefully (GitHub Actions sends SIGKILL instead of SIGTERM at the end)
+          kill $atlantis_pid
+          wait $atlantis_pid
+
+      - name: Save Atlantis data
+        id: save-atlantis-data
+        uses: actions/cache/save@v4
+        if: always() && steps.restore-atlantis-data.outputs.cache-hit != 'true'
+        with:
+          path: ${{github.workspace}}/atlantis-data
+          key: ${{ steps.restore-atlantis-data.outputs.cache-primary-key }}
+    

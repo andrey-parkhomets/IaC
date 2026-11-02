@@ -1,0 +1,45 @@
+---
+repos:
+  - id: /.*/
+    apply_requirements:
+      - mergeable
+      - approved
+    allowed_overrides:
+      - workflow
+    allow_custom_workflows: true
+    allowed_workflows:
+      - azure
+      - noworkflow
+    workflow: noworkflow
+workflows:
+  noworkflow:
+    plan:
+      steps:
+        - run: echo "No Workflow Configured, Doing Nothing!!!! "
+  # Generic for every tf/<env> project: subscription and backend come from the project's backend.hcl
+  azure:
+    plan:
+      steps:
+        - run: echo "===== Plan Stage"
+        - env:
+            name: ARM_SUBSCRIPTION_ID
+            command: hcl-get subscription_id backend.hcl
+        - env:
+            # Reduce Terraform suggestion output
+            name: TF_IN_AUTOMATION
+            value: 'true'
+        - init:
+            extra_args: ["-backend-config=backend.hcl"]
+        - plan
+
+    apply:
+      steps:
+        - run: echo "===== Apply Stage"
+        - env:
+            name: ARM_SUBSCRIPTION_ID
+            command: hcl-get subscription_id backend.hcl
+        - env:
+            # Reduce Terraform suggestion output
+            name: TF_IN_AUTOMATION
+            value: 'true'
+        - apply

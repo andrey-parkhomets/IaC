@@ -1,0 +1,23 @@
+name: Clean Cache
+run-name: "Clean Atlantis Cache for PR #${{ github.event.pull_request.number }}"
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  clean-cache:
+    runs-on: ubuntu-24.04
+    container:
+      image: maniator/gh:latest
+    steps:
+      - name: Clean Atlantis Cache
+        run: |
+          gh cache delete atlantis-data-${PR_NUMBER}  --repo $OWNER/$REPO || (exit 0)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
